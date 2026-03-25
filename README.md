@@ -1,5 +1,7 @@
 # turf
 
+[![CI](https://github.com/evanpurkhiser/turf/actions/workflows/ci.yml/badge.svg)](https://github.com/evanpurkhiser/turf/actions/workflows/ci.yml)
+
 A toolkit for GitHub CODEOWNERS files. Formats, sorts, and queries ownership.
 
 ## Usage
