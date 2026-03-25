@@ -4,35 +4,37 @@
 
 A toolkit for GitHub CODEOWNERS files. Formats, sorts, and queries ownership.
 
-## Usage
+## Commands
 
-```
-turf format <FILE>              # format and sort, print to stdout
-turf format <FILE> -w           # format and sort in-place
-turf format <FILE> --check      # exit 1 if not formatted (for CI)
-turf format <FILE> --no-sort    # format only, skip sorting
-cat CODEOWNERS | turf           # stdin/stdout pipe
+- **`format`** -- Format and sort a CODEOWNERS file. Aligns owner columns within each group, collapses extra blank lines, and sorts rules lexicographically while preserving last-match-wins semantics. Can read from a file or stdin.
 
-turf who-owns .                 # show owners for all files in repo
-turf who-owns src/api/          # show owners scoped to a directory
-turf who-owns src/foo.py        # show owner of a specific file
-turf who-owns . --unowned       # include unowned files in output
+  ```
+  turf format <FILE>              # format and sort, print to stdout
+  turf format <FILE> -w           # format and sort in-place
+  turf format <FILE> --check      # exit 1 if not formatted (for CI)
+  turf format <FILE> --no-sort    # format only, skip sorting
+  cat CODEOWNERS | turf           # stdin/stdout pipe
+  ```
 
-turf disputed .                 # find rules overridden by later rules
-turf disputed src/api/          # scoped to a directory
-```
+- **`who-owns`** -- Show which teams own which files by evaluating the CODEOWNERS rules against actual files in the repo. Auto-detects the CODEOWNERS file location.
 
-## Formatting rules
+  ```
+  turf who-owns .                 # show owners for all files in repo
+  turf who-owns src/api/          # show owners scoped to a directory
+  turf who-owns src/foo.py        # show owner of a specific file
+  turf who-owns . --unowned       # include unowned files in output
+  ```
 
-- Within each group (separated by blank lines), the owner column is aligned to one space after the longest pattern in that group.
-- Multiple consecutive blank lines between groups are collapsed to a single blank line.
-- Rules within each group are sorted lexicographically by file pattern (see below).
-- Comments and inline comments are preserved exactly as written.
-- A trailing newline is ensured.
+- **`disputed`** -- Find dead rules where a specific pattern appears before a more general one, making it completely ineffective. A rule is flagged only when it is overridden on every single file it matches. Exits 1 if any dead rules are found.
+
+  ```
+  turf disputed .                 # find dead rules in the repo
+  turf disputed src/api/          # scoped to a directory
+  ```
 
 ## Sorting algorithm
 
-By default, rules within each group are sorted lexicographically by file pattern. The sorting algorithm is designed to never change which team owns which file.
+By default, `turf format` sorts rules within each group lexicographically by file pattern. The sorting algorithm is designed to never change which team owns which file.
 
 CODEOWNERS uses last-match-wins semantics: if multiple rules match a file, the last one in the file determines ownership. This means carelessly reordering rules could silently reassign ownership.
 
