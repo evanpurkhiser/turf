@@ -212,7 +212,8 @@ fn cmd_whoowns(path: &Path, codeowners: Option<&Path>, unowned: bool) {
 }
 
 fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
-    use std::collections::{BTreeMap, BTreeSet};
+    use rayon::prelude::*;
+    use std::collections::BTreeMap;
 
     let repo_root = find_repo_root(path);
     let codeowners_path = match codeowners {
@@ -222,65 +223,81 @@ fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
 
     let input = read_file(&codeowners_path);
     let parsed = ast::parse(&input);
-    use rayon::prelude::*;
-
     let rule_set = matcher::RuleSet::new(&parsed);
     let rules = &rule_set.rules;
     let files = git_ls_files(&repo_root);
 
-    // Match in parallel, collecting per-file dispute pairs.
-    let per_file_disputes: Vec<Vec<(usize, usize)>> = files
+    // For each rule, track:
+    // - total files it matches
+    // - files where it's overridden (a later rule with different owners wins)
+    // - which later rules override it and how many files
+    //
+    // A rule is "dead" (disputed) when it's overridden on ALL files it matches,
+    // meaning it can never actually determine ownership. This catches the case
+    // where a specific rule appears before a general one, making it useless.
+    let n = rules.len();
+
+    // Parallel: for each file, collect (rule_idx, is_winner, winner_idx) tuples.
+    let per_file: Vec<Vec<(usize, Option<usize>)>> = files
         .par_iter()
         .filter_map(|file| {
             let matching = rule_set.find_all_matching(file);
-            if matching.len() < 2 {
+            if matching.is_empty() {
                 return None;
             }
             let winner = *matching.last().unwrap();
             let winner_owners = &rules[winner].owners;
-            let pairs: Vec<(usize, usize)> = matching[..matching.len() - 1]
+            let result: Vec<(usize, Option<usize>)> = matching
                 .iter()
-                .filter(|&&idx| rules[idx].owners != *winner_owners)
-                .map(|&idx| (idx, winner))
+                .map(|&idx| {
+                    if idx == winner {
+                        (idx, None) // this rule wins
+                    } else if rules[idx].owners != *winner_owners {
+                        (idx, Some(winner)) // overridden by a different owner
+                    } else {
+                        (idx, None) // overridden but same owners, doesn't matter
+                    }
+                })
                 .collect();
-            if pairs.is_empty() { None } else { Some(pairs) }
+            Some(result)
         })
         .collect();
 
-    // Reduce into aggregated counts.
-    let mut disputes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-    let mut disputed_rules: BTreeSet<usize> = BTreeSet::new();
-    for pairs in per_file_disputes {
-        for (overridden, winner) in pairs {
-            *disputes.entry((overridden, winner)).or_insert(0) += 1;
-            disputed_rules.insert(overridden);
+    // Reduce: count total matches and overrides per rule.
+    let mut total_matches = vec![0usize; n];
+    let mut overridden_matches = vec![0usize; n];
+    let mut override_by: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+
+    for file_results in per_file {
+        for (rule_idx, override_winner) in file_results {
+            total_matches[rule_idx] += 1;
+            if let Some(winner) = override_winner {
+                overridden_matches[rule_idx] += 1;
+                *override_by.entry((rule_idx, winner)).or_insert(0) += 1;
+            }
         }
     }
 
-    if disputed_rules.is_empty() {
+    // A rule is dead if it matches at least one file and is overridden on all of them.
+    let dead_rules: Vec<usize> = (0..n)
+        .filter(|&i| total_matches[i] > 0 && overridden_matches[i] == total_matches[i])
+        .collect();
+
+    if dead_rules.is_empty() {
         eprintln!("No disputed rules found.");
         return;
     }
 
-    // Group by overridden rule for display.
-    let mut by_overridden: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
-    for (&(overridden, winner), &count) in &disputes {
-        by_overridden
-            .entry(overridden)
-            .or_default()
-            .push((winner, count));
-    }
-
-    let mut total_disputes = 0;
-    for (&rule_idx, overrides) in &by_overridden {
+    for &rule_idx in &dead_rules {
         let rule = &rules[rule_idx];
         println!(
-            "line {}: {} {} is overridden by:",
+            "line {}: {} {} is fully overridden ({} files):",
             rule.line_number,
             rule.pattern,
             rule.owners.join(" "),
+            total_matches[rule_idx],
         );
-        for &(winner_idx, count) in overrides {
+        for (&(_, winner_idx), &count) in override_by.range((rule_idx, 0)..=(rule_idx, n)) {
             let winner = &rules[winner_idx];
             println!(
                 "  line {}: {} {} ({count} files)",
@@ -289,11 +306,10 @@ fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
                 winner.owners.join(" "),
             );
         }
-        total_disputes += 1;
         println!();
     }
 
-    eprintln!("{total_disputes} disputed rules found.");
+    eprintln!("{} dead rules found.", dead_rules.len());
     process::exit(1);
 }
 
