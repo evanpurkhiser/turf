@@ -79,22 +79,30 @@ fn sort_group(group: &mut Group) {
         }
     }
 
-    // Kahn's algorithm with a min-heap keyed by (pattern, index)
-    // to get the lexicographically smallest valid ordering.
-    let mut heap: BinaryHeap<Reverse<(&str, usize)>> = BinaryHeap::new();
+    // Sort key: (is_anchored, pattern, index).
+    // Unanchored patterns (false) sort before anchored (true),
+    // then lexicographically by pattern within each group.
+    let sort_key = |i: usize| -> (bool, &str, usize) {
+        let pattern = entries[i].rule.pattern.as_str();
+        (!is_unanchored(pattern), pattern, i)
+    };
+
+    // Kahn's algorithm with a min-heap to get the lexicographically
+    // smallest valid ordering that respects conflict constraints.
+    let mut heap: BinaryHeap<Reverse<(bool, &str, usize)>> = BinaryHeap::new();
     for i in 0..n {
         if in_degree[i] == 0 {
-            heap.push(Reverse((entries[i].rule.pattern.as_str(), i)));
+            heap.push(Reverse(sort_key(i)));
         }
     }
 
     let mut sorted_indices: Vec<usize> = Vec::with_capacity(n);
-    while let Some(Reverse((_, idx))) = heap.pop() {
+    while let Some(Reverse((_, _, idx))) = heap.pop() {
         sorted_indices.push(idx);
         for &next in &adj[idx] {
             in_degree[next] -= 1;
             if in_degree[next] == 0 {
-                heap.push(Reverse((entries[next].rule.pattern.as_str(), next)));
+                heap.push(Reverse(sort_key(next)));
             }
         }
     }
@@ -344,5 +352,44 @@ mod tests {
             })
             .collect();
         assert_eq!(lines, vec!["/src/a/", "/src/z/", "# trailing"]);
+    }
+
+    #[test]
+    fn test_sort_unanchored_before_anchored() {
+        // Unanchored patterns (no leading /) should sort before anchored ones.
+        let input = "/src/z/ @team\n*.js @team\nMakefile @team\n/src/a/ @team\n";
+        let mut file = ast::parse(input);
+        sort_groups(&mut file);
+
+        let rules: Vec<&str> = file.groups[0]
+            .lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Rule(r) => Some(r.pattern.as_str()),
+                _ => None,
+            })
+            .collect();
+        // Unanchored first (sorted among themselves), then anchored (sorted).
+        assert_eq!(rules, vec!["*.js", "Makefile", "/src/a/", "/src/z/"]);
+    }
+
+    #[test]
+    fn test_sort_unanchored_before_anchored_mixed_owners() {
+        // *.py was originally after /src/b/ with different owners and overlapping
+        // patterns, so it must stay after /src/b/ (moving it before would change
+        // who owns src/b/*.py files). /src/a/ and /src/b/ are disjoint and free to sort.
+        let input = "/src/b/ @team-b\n*.py @team-a\n/src/a/ @team-a\n";
+        let mut file = ast::parse(input);
+        sort_groups(&mut file);
+
+        let rules: Vec<&str> = file.groups[0]
+            .lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Rule(r) => Some(r.pattern.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rules, vec!["/src/a/", "/src/b/", "*.py"]);
     }
 }
