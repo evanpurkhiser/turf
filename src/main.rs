@@ -49,6 +49,16 @@ enum Commands {
         #[arg(long)]
         unowned: bool,
     },
+
+    /// Find rules that are overridden by later rules with different owners.
+    Disputed {
+        /// Path to a file or directory. Use `.` for the entire repo.
+        path: PathBuf,
+
+        /// Path to the CODEOWNERS file. Auto-detected if not provided.
+        #[arg(long)]
+        codeowners: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -74,6 +84,7 @@ fn main() {
             codeowners,
             unowned,
         }) => cmd_whoowns(&path, codeowners.as_deref(), unowned),
+        Some(Commands::Disputed { path, codeowners }) => cmd_disputed(&path, codeowners.as_deref()),
     }
 }
 
@@ -192,6 +203,86 @@ fn cmd_whoowns(path: &Path, codeowners: Option<&Path>, unowned: bool) {
         "\n{owned_count} owned, {unowned_count} unowned, {} total files",
         files.len()
     );
+}
+
+fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let repo_root = find_repo_root(path);
+    let codeowners_path = match codeowners {
+        Some(p) => p.to_path_buf(),
+        None => find_codeowners_file(&repo_root),
+    };
+
+    let input = read_file(&codeowners_path);
+    let parsed = ast::parse(&input);
+    let rules = matcher::compile_rules(&parsed);
+    let files = git_ls_files(&repo_root);
+
+    // For each rule that gets overridden, track which later rules override it
+    // and how many files are affected.
+    // Key: (overridden_rule_idx, winning_rule_idx) -> count of files
+    let mut disputes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    // Track which overridden rules exist at all.
+    let mut disputed_rules: BTreeSet<usize> = BTreeSet::new();
+
+    for file in &files {
+        let matching = matcher::find_all_matching(file, &rules);
+        if matching.len() < 2 {
+            continue;
+        }
+
+        // Last match wins.
+        let winner = *matching.last().unwrap();
+        let winner_owners = &rules[winner].owners;
+
+        // All earlier matches with different owners are overridden.
+        for &idx in &matching[..matching.len() - 1] {
+            if rules[idx].owners != *winner_owners {
+                *disputes.entry((idx, winner)).or_insert(0) += 1;
+                disputed_rules.insert(idx);
+            }
+        }
+    }
+
+    if disputed_rules.is_empty() {
+        eprintln!("No disputed rules found.");
+        return;
+    }
+
+    // Group by overridden rule for display.
+    let mut by_overridden: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+    for (&(overridden, winner), &count) in &disputes {
+        by_overridden
+            .entry(overridden)
+            .or_default()
+            .push((winner, count));
+    }
+
+    let mut total_disputes = 0;
+    for (&rule_idx, overrides) in &by_overridden {
+        let rule = &rules[rule_idx];
+        println!(
+            "line {}: {} {} is overridden by:",
+            rule.line_number,
+            rule.pattern,
+            rule.owners.join(" "),
+        );
+        for &(winner_idx, count) in overrides {
+            let winner = &rules[winner_idx];
+            println!(
+                "  line {}: {} {} ({count} files)",
+                winner.line_number,
+                winner.pattern,
+                winner.owners.join(" "),
+            );
+        }
+        total_disputes += 1;
+        println!();
+    }
+
+    eprintln!("{total_disputes} disputed rules found.");
+    process::exit(1);
 }
 
 fn find_repo_root(from: &Path) -> PathBuf {

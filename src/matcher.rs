@@ -4,23 +4,35 @@ use crate::ast::{File, Line, Rule};
 
 /// A compiled CODEOWNERS rule ready for matching.
 pub struct CompiledRule {
+    pub pattern: String,
     pub owners: Vec<String>,
     pub matcher: GlobMatcher,
+    /// 1-based line number in the source file.
+    pub line_number: usize,
 }
 
 /// Compile all rules from a CODEOWNERS AST into matchers.
 pub fn compile_rules(file: &File) -> Vec<CompiledRule> {
-    file.groups
-        .iter()
-        .flat_map(|group| &group.lines)
-        .filter_map(|line| match line {
-            Line::Rule(rule) => compile_rule(rule),
-            _ => None,
-        })
-        .collect()
+    let mut line_number = 0usize;
+    let mut rules = Vec::new();
+
+    for group in &file.groups {
+        for line in &group.lines {
+            line_number += 1;
+            if let Line::Rule(rule) = line
+                && let Some(compiled) = compile_rule(rule, line_number)
+            {
+                rules.push(compiled);
+            }
+        }
+        // Account for the blank line between groups.
+        line_number += 1;
+    }
+
+    rules
 }
 
-fn compile_rule(rule: &Rule) -> Option<CompiledRule> {
+fn compile_rule(rule: &Rule, line_number: usize) -> Option<CompiledRule> {
     let glob_pattern = codeowners_to_glob(&rule.pattern);
     let glob = GlobBuilder::new(&glob_pattern)
         .literal_separator(true)
@@ -28,8 +40,10 @@ fn compile_rule(rule: &Rule) -> Option<CompiledRule> {
         .ok()?;
 
     Some(CompiledRule {
+        pattern: rule.pattern.clone(),
         owners: rule.owners.clone(),
         matcher: glob.compile_matcher(),
+        line_number,
     })
 }
 
@@ -66,6 +80,17 @@ pub fn find_owners<'a>(path: &str, rules: &'a [CompiledRule]) -> &'a [String] {
         .iter()
         .rfind(|rule| rule.matcher.is_match(path))
         .map_or(&[], |rule| &rule.owners)
+}
+
+/// Find all rules that match a given file path, in order.
+/// Returns indices into the rules slice.
+pub fn find_all_matching(path: &str, rules: &[CompiledRule]) -> Vec<usize> {
+    rules
+        .iter()
+        .enumerate()
+        .filter(|(_, rule)| rule.matcher.is_match(path))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 #[cfg(test)]
