@@ -183,11 +183,17 @@ fn cmd_whoowns(path: &Path, codeowners: Option<&Path>, unowned: bool) {
         }
     };
 
+    // Match in parallel, then print in order.
+    use rayon::prelude::*;
+    let results: Vec<_> = files
+        .par_iter()
+        .map(|file| (file.as_str(), rule_set.find_owners(file).to_vec()))
+        .collect();
+
     let mut owned_count = 0;
     let mut unowned_count = 0;
 
-    for file in &files {
-        let owners = rule_set.find_owners(file);
+    for (file, owners) in &results {
         if owners.is_empty() {
             unowned_count += 1;
             if unowned {
@@ -216,33 +222,38 @@ fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
 
     let input = read_file(&codeowners_path);
     let parsed = ast::parse(&input);
+    use rayon::prelude::*;
+
     let rule_set = matcher::RuleSet::new(&parsed);
     let rules = &rule_set.rules;
     let files = git_ls_files(&repo_root);
 
-    // For each rule that gets overridden, track which later rules override it
-    // and how many files are affected.
-    // Key: (overridden_rule_idx, winning_rule_idx) -> count of files
-    let mut disputes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-    // Track which overridden rules exist at all.
-    let mut disputed_rules: BTreeSet<usize> = BTreeSet::new();
-
-    for file in &files {
-        let matching = rule_set.find_all_matching(file);
-        if matching.len() < 2 {
-            continue;
-        }
-
-        // Last match wins.
-        let winner = *matching.last().unwrap();
-        let winner_owners = &rules[winner].owners;
-
-        // All earlier matches with different owners are overridden.
-        for &idx in &matching[..matching.len() - 1] {
-            if rules[idx].owners != *winner_owners {
-                *disputes.entry((idx, winner)).or_insert(0) += 1;
-                disputed_rules.insert(idx);
+    // Match in parallel, collecting per-file dispute pairs.
+    let per_file_disputes: Vec<Vec<(usize, usize)>> = files
+        .par_iter()
+        .filter_map(|file| {
+            let matching = rule_set.find_all_matching(file);
+            if matching.len() < 2 {
+                return None;
             }
+            let winner = *matching.last().unwrap();
+            let winner_owners = &rules[winner].owners;
+            let pairs: Vec<(usize, usize)> = matching[..matching.len() - 1]
+                .iter()
+                .filter(|&&idx| rules[idx].owners != *winner_owners)
+                .map(|&idx| (idx, winner))
+                .collect();
+            if pairs.is_empty() { None } else { Some(pairs) }
+        })
+        .collect();
+
+    // Reduce into aggregated counts.
+    let mut disputes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let mut disputed_rules: BTreeSet<usize> = BTreeSet::new();
+    for pairs in per_file_disputes {
+        for (overridden, winner) in pairs {
+            *disputes.entry((overridden, winner)).or_insert(0) += 1;
+            disputed_rules.insert(overridden);
         }
     }
 
