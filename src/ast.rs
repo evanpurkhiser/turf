@@ -183,7 +183,9 @@ mod tests {
 
         // First group: just a comment
         assert_eq!(file.groups[0].lines.len(), 1);
-        assert!(matches!(&file.groups[0].lines[0], Line::Comment(c) if c.text == "# Header comment"));
+        assert!(
+            matches!(&file.groups[0].lines[0], Line::Comment(c) if c.text == "# Header comment")
+        );
 
         // Second group: two rules
         assert_eq!(file.groups[1].lines.len(), 2);

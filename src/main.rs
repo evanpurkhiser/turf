@@ -9,10 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 #[derive(Parser)]
-#[command(
-    name = "codeowners-format",
-    about = "Auto-formatter for GitHub CODEOWNERS files"
-)]
+#[command(name = "turf", about = "Toolkit for GitHub CODEOWNERS files")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -33,9 +30,9 @@ enum Commands {
         #[arg(short = 'w', long = "write")]
         write_in_place: bool,
 
-        /// Sort rules within each group lexicographically (preserving override semantics).
+        /// Skip sorting rules within groups.
         #[arg(long)]
-        sort: bool,
+        no_sort: bool,
     },
 
     /// Show who owns files in a repository.
@@ -61,7 +58,8 @@ fn main() {
         // Default to format behavior when no subcommand (backwards compat with pipe usage).
         None => {
             let input = read_stdin();
-            let file = ast::parse(&input);
+            let mut file = ast::parse(&input);
+            sorter::sort_groups(&mut file);
             let formatted = formatter::format(&file);
             print!("{formatted}");
         }
@@ -69,8 +67,8 @@ fn main() {
             file,
             check,
             write_in_place,
-            sort,
-        }) => cmd_format(file, check, write_in_place, sort),
+            no_sort,
+        }) => cmd_format(file, check, write_in_place, no_sort),
         Some(Commands::WhoOwns {
             path,
             codeowners,
@@ -79,14 +77,14 @@ fn main() {
     }
 }
 
-fn cmd_format(file: Option<PathBuf>, check: bool, write_in_place: bool, sort: bool) {
+fn cmd_format(file: Option<PathBuf>, check: bool, write_in_place: bool, no_sort: bool) {
     let input = match &file {
         Some(path) => read_file(path),
         None => read_stdin(),
     };
 
     let mut parsed = ast::parse(&input);
-    if sort {
+    if !no_sort {
         sorter::sort_groups(&mut parsed);
     }
     let formatted = formatter::format(&parsed);
@@ -144,7 +142,11 @@ fn cmd_whoowns(path: &Path, codeowners: Option<&Path>, unowned: bool) {
                 .unwrap_or(&abs)
                 .to_string_lossy()
                 .to_string();
-            Some(if rel.ends_with('/') { rel } else { format!("{rel}/") })
+            Some(if rel.ends_with('/') {
+                rel
+            } else {
+                format!("{rel}/")
+            })
         }
     };
 
@@ -212,7 +214,10 @@ fn find_repo_root(from: &Path) -> PathBuf {
         match dir.parent() {
             Some(parent) => dir = parent,
             None => {
-                eprintln!("error: not a git repository (or any parent): {}", from.display());
+                eprintln!(
+                    "error: not a git repository (or any parent): {}",
+                    from.display()
+                );
                 process::exit(2);
             }
         }
@@ -232,10 +237,7 @@ fn find_codeowners_file(repo_root: &Path) -> PathBuf {
         }
     }
 
-    eprintln!(
-        "error: no CODEOWNERS file found in {}",
-        repo_root.display()
-    );
+    eprintln!("error: no CODEOWNERS file found in {}", repo_root.display());
     process::exit(2);
 }
 

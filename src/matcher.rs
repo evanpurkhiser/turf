@@ -85,7 +85,10 @@ mod tests {
     #[test]
     fn test_rooted_directory() {
         assert!(glob_matches("/src/sentry/api/", "src/sentry/api/foo.py"));
-        assert!(glob_matches("/src/sentry/api/", "src/sentry/api/sub/foo.py"));
+        assert!(glob_matches(
+            "/src/sentry/api/",
+            "src/sentry/api/sub/foo.py"
+        ));
         assert!(!glob_matches("/src/sentry/api/", "src/sentry/utils/foo.py"));
     }
 
@@ -145,14 +148,12 @@ mod tests {
 
     #[test]
     fn test_directory_override() {
-        let input = "/src/sentry/snuba/ @snuba\n/src/sentry/snuba/metrics/query.py @snuba @telemetry\n";
+        let input =
+            "/src/sentry/snuba/ @snuba\n/src/sentry/snuba/metrics/query.py @snuba @telemetry\n";
         let file = crate::ast::parse(input);
         let rules = compile_rules(&file);
 
-        assert_eq!(
-            find_owners("src/sentry/snuba/foo.py", &rules),
-            &["@snuba"]
-        );
+        assert_eq!(find_owners("src/sentry/snuba/foo.py", &rules), &["@snuba"]);
         assert_eq!(
             find_owners("src/sentry/snuba/metrics/query.py", &rules),
             &["@snuba", "@telemetry"]

@@ -1,5 +1,5 @@
-use std::collections::BinaryHeap;
 use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use crate::ast::{File, Group, Line, Rule};
 
@@ -171,7 +171,7 @@ fn anchor_prefix(pattern: &str) -> &str {
     let p = pattern.strip_prefix('/').unwrap_or(pattern);
 
     // Find the first wildcard character.
-    let wildcard_pos = p.find(|c: char| c == '*' || c == '?' || c == '[');
+    let wildcard_pos = p.find(['*', '?', '[']);
     let before_wildcard = match wildcard_pos {
         Some(pos) => &p[..pos],
         None => p,
@@ -202,7 +202,10 @@ mod tests {
     fn test_anchor_prefix() {
         assert_eq!(anchor_prefix("/src/sentry/api/"), "src/sentry/api/");
         assert_eq!(anchor_prefix("/bin/mock*"), "bin/");
-        assert_eq!(anchor_prefix("/src/sentry/snuba/metrics/query.py"), "src/sentry/snuba/metrics/");
+        assert_eq!(
+            anchor_prefix("/src/sentry/snuba/metrics/query.py"),
+            "src/sentry/snuba/metrics/"
+        );
         assert_eq!(anchor_prefix("*.js"), "");
         assert_eq!(anchor_prefix("/Makefile"), "");
     }
@@ -210,7 +213,10 @@ mod tests {
     #[test]
     fn test_may_overlap_same_tree() {
         // Same directory tree → overlap
-        assert!(may_overlap("/src/sentry/api/", "/src/sentry/api/endpoints/relay/"));
+        assert!(may_overlap(
+            "/src/sentry/api/",
+            "/src/sentry/api/endpoints/relay/"
+        ));
         // Different trees → no overlap
         assert!(!may_overlap("/src/sentry/api/", "/tests/sentry/relay/"));
     }

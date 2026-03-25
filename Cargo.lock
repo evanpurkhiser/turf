@@ -112,14 +112,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "codeowners-format"
-version = "0.1.0"
-dependencies = [
- "clap",
- "globset",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -247,6 +239,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "turf"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "globset",
 ]
 
 [[package]]

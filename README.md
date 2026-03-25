@@ -1,33 +1,33 @@
-# codeowners-format
+# turf
 
-A formatter for GitHub CODEOWNERS files. Aligns columns, normalizes whitespace, and optionally sorts rules within groups while preserving override semantics.
+A toolkit for GitHub CODEOWNERS files. Formats, sorts, and queries ownership.
 
 ## Usage
 
 ```
-codeowners-format format <FILE>              # print formatted output to stdout
-codeowners-format format <FILE> -w           # format in-place
-codeowners-format format <FILE> --check      # exit 1 if not formatted (for CI)
-codeowners-format format <FILE> --sort       # sort rules within groups
-codeowners-format format <FILE> --sort -w    # sort and write in-place
-cat CODEOWNERS | codeowners-format           # stdin/stdout pipe
+turf format <FILE>              # format and sort, print to stdout
+turf format <FILE> -w           # format and sort in-place
+turf format <FILE> --check      # exit 1 if not formatted (for CI)
+turf format <FILE> --no-sort    # format only, skip sorting
+cat CODEOWNERS | turf           # stdin/stdout pipe
 
-codeowners-format who-owns .                  # show owners for all files in repo
-codeowners-format who-owns src/api/           # show owners scoped to a directory
-codeowners-format who-owns src/foo.py         # show owner of a specific file
-codeowners-format who-owns . --unowned        # include unowned files in output
+turf who-owns .                 # show owners for all files in repo
+turf who-owns src/api/          # show owners scoped to a directory
+turf who-owns src/foo.py        # show owner of a specific file
+turf who-owns . --unowned       # include unowned files in output
 ```
 
 ## Formatting rules
 
 - Within each group (separated by blank lines), the owner column is aligned to one space after the longest pattern in that group.
 - Multiple consecutive blank lines between groups are collapsed to a single blank line.
+- Rules within each group are sorted lexicographically by file pattern (see below).
 - Comments and inline comments are preserved exactly as written.
 - A trailing newline is ensured.
 
 ## Sorting algorithm
 
-When `--sort` is passed, rules within each group are sorted lexicographically by file pattern. The sorting algorithm is designed to never change which team owns which file.
+By default, rules within each group are sorted lexicographically by file pattern. The sorting algorithm is designed to never change which team owns which file.
 
 CODEOWNERS uses last-match-wins semantics: if multiple rules match a file, the last one in the file determines ownership. This means carelessly reordering rules could silently reassign ownership.
 
@@ -47,13 +47,13 @@ You can verify that sorting is safe for your file using `who-owns`:
 
 ```
 # Capture ownership before
-codeowners-format who-owns . | sort > before.txt
+turf who-owns . | sort > before.txt
 
-# Sort the file
-codeowners-format format CODEOWNERS --sort -w
+# Format the file
+turf format CODEOWNERS -w
 
 # Capture ownership after
-codeowners-format who-owns . | sort > after.txt
+turf who-owns . | sort > after.txt
 
 # Verify identical
 diff before.txt after.txt

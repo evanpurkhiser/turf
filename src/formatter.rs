@@ -134,7 +134,10 @@ mod tests {
         let input = "# Group 1\n/src/ @team1\n\n# Group 2\n/lib/ @team2\n";
         let file = parse(input);
         let output = format(&file);
-        assert_eq!(output, "# Group 1\n/src/ @team1\n\n# Group 2\n/lib/ @team2\n");
+        assert_eq!(
+            output,
+            "# Group 1\n/src/ @team1\n\n# Group 2\n/lib/ @team2\n"
+        );
     }
 
     #[test]
