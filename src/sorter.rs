@@ -90,8 +90,8 @@ fn sort_group(group: &mut Group) {
     // Kahn's algorithm with a min-heap to get the lexicographically
     // smallest valid ordering that respects conflict constraints.
     let mut heap: BinaryHeap<Reverse<(bool, &str, usize)>> = BinaryHeap::new();
-    for i in 0..n {
-        if in_degree[i] == 0 {
+    for (i, &deg) in in_degree.iter().enumerate() {
+        if deg == 0 {
             heap.push(Reverse(sort_key(i)));
         }
     }
@@ -143,7 +143,21 @@ fn may_overlap(a: &str, b: &str) -> bool {
         return true;
     }
 
-    // If either is unanchored (no / in beginning or middle), it matches anywhere.
+    // If both are unanchored, check if they could match the same file.
+    if is_unanchored(a) && is_unanchored(b) {
+        // Two bare literal filenames (no wildcards, no trailing slash) can only
+        // match the same file if they're literally identical.
+        // e.g., `Makefile` and `.git-blame-ignore-revs` can never overlap.
+        let a_is_literal = !a.contains(['*', '?', '[']) && !a.ends_with('/');
+        let b_is_literal = !b.contains(['*', '?', '[']) && !b.ends_with('/');
+        if a_is_literal && b_is_literal {
+            return a == b;
+        }
+        // Otherwise (wildcards or directories), be conservative.
+        return true;
+    }
+
+    // If only one is unanchored, it could match anywhere — assume overlap.
     if is_unanchored(a) || is_unanchored(b) {
         return true;
     }
@@ -235,6 +249,19 @@ mod tests {
         assert!(may_overlap("**/logs", "/src/foo/"));
         // Unanchored glob overlaps with everything
         assert!(may_overlap("*.js", "/src/foo.py"));
+    }
+
+    #[test]
+    fn test_may_overlap_unanchored_literals() {
+        // Two different bare filenames can never match the same file.
+        assert!(!may_overlap("Makefile", ".git-blame-ignore-revs"));
+        assert!(!may_overlap("Makefile", ".envrc"));
+        // Same bare filename does overlap (trivially).
+        assert!(may_overlap("Makefile", "Makefile"));
+        // Wildcard unanchored still overlaps conservatively.
+        assert!(may_overlap("*.js", "Makefile"));
+        // Unanchored directory patterns overlap conservatively.
+        assert!(may_overlap("docs/", "logs/"));
     }
 
     #[test]
