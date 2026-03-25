@@ -135,7 +135,7 @@ fn cmd_whoowns(path: &Path, codeowners: Option<&Path>, unowned: bool) {
 
     let input = read_file(&codeowners_path);
     let parsed = ast::parse(&input);
-    let rules = matcher::compile_rules(&parsed);
+    let rule_set = matcher::RuleSet::new(&parsed);
 
     let scope_prefix = if path.is_file() {
         None
@@ -187,7 +187,7 @@ fn cmd_whoowns(path: &Path, codeowners: Option<&Path>, unowned: bool) {
     let mut unowned_count = 0;
 
     for file in &files {
-        let owners = matcher::find_owners(file, &rules);
+        let owners = rule_set.find_owners(file);
         if owners.is_empty() {
             unowned_count += 1;
             if unowned {
@@ -216,7 +216,8 @@ fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
 
     let input = read_file(&codeowners_path);
     let parsed = ast::parse(&input);
-    let rules = matcher::compile_rules(&parsed);
+    let rule_set = matcher::RuleSet::new(&parsed);
+    let rules = &rule_set.rules;
     let files = git_ls_files(&repo_root);
 
     // For each rule that gets overridden, track which later rules override it
@@ -227,7 +228,7 @@ fn cmd_disputed(path: &Path, codeowners: Option<&Path>) {
     let mut disputed_rules: BTreeSet<usize> = BTreeSet::new();
 
     for file in &files {
-        let matching = matcher::find_all_matching(file, &rules);
+        let matching = rule_set.find_all_matching(file);
         if matching.len() < 2 {
             continue;
         }

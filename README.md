@@ -17,6 +17,9 @@ turf who-owns .                 # show owners for all files in repo
 turf who-owns src/api/          # show owners scoped to a directory
 turf who-owns src/foo.py        # show owner of a specific file
 turf who-owns . --unowned       # include unowned files in output
+
+turf disputed .                 # find rules overridden by later rules
+turf disputed src/api/          # scoped to a directory
 ```
 
 ## Formatting rules

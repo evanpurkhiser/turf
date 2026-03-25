@@ -1,4 +1,4 @@
-use globset::{GlobBuilder, GlobMatcher};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::ast::{File, Line, Rule};
 
@@ -6,7 +6,6 @@ use crate::ast::{File, Line, Rule};
 pub struct CompiledRule {
     pub pattern: String,
     pub owners: Vec<String>,
-    pub matcher: GlobMatcher,
     /// 1-based line number in the source file.
     pub line_number: usize,
 }
@@ -33,8 +32,9 @@ pub fn compile_rules(file: &File) -> Vec<CompiledRule> {
 }
 
 fn compile_rule(rule: &Rule, line_number: usize) -> Option<CompiledRule> {
+    // Validate that the pattern compiles as a glob.
     let glob_pattern = codeowners_to_glob(&rule.pattern);
-    let glob = GlobBuilder::new(&glob_pattern)
+    GlobBuilder::new(&glob_pattern)
         .literal_separator(true)
         .build()
         .ok()?;
@@ -42,7 +42,6 @@ fn compile_rule(rule: &Rule, line_number: usize) -> Option<CompiledRule> {
     Some(CompiledRule {
         pattern: rule.pattern.clone(),
         owners: rule.owners.clone(),
-        matcher: glob.compile_matcher(),
         line_number,
     })
 }
@@ -73,24 +72,44 @@ fn codeowners_to_glob(pattern: &str) -> String {
     result
 }
 
-/// Find the owners of a given file path using last-match-wins semantics.
-/// Returns the owners from the last matching rule, or an empty slice if unowned.
-pub fn find_owners<'a>(path: &str, rules: &'a [CompiledRule]) -> &'a [String] {
-    rules
-        .iter()
-        .rfind(|rule| rule.matcher.is_match(path))
-        .map_or(&[], |rule| &rule.owners)
+/// A compiled set of all rules, using GlobSet for efficient batch matching.
+pub struct RuleSet {
+    pub rules: Vec<CompiledRule>,
+    glob_set: GlobSet,
 }
 
-/// Find all rules that match a given file path, in order.
-/// Returns indices into the rules slice.
-pub fn find_all_matching(path: &str, rules: &[CompiledRule]) -> Vec<usize> {
-    rules
-        .iter()
-        .enumerate()
-        .filter(|(_, rule)| rule.matcher.is_match(path))
-        .map(|(i, _)| i)
-        .collect()
+impl RuleSet {
+    /// Build a RuleSet from a parsed CODEOWNERS file.
+    pub fn new(file: &File) -> Self {
+        let rules = compile_rules(file);
+        let mut builder = GlobSetBuilder::new();
+        for rule in &rules {
+            // Re-build the glob for the set. We need to match the same
+            // settings used in compile_rule.
+            let glob_pattern = codeowners_to_glob(&rule.pattern);
+            let glob = GlobBuilder::new(&glob_pattern)
+                .literal_separator(true)
+                .build()
+                .unwrap();
+            builder.add(glob);
+        }
+        let glob_set = builder.build().unwrap();
+        Self { rules, glob_set }
+    }
+
+    /// Find all rules that match a given file path.
+    /// Returns indices into the rules slice, sorted in order.
+    pub fn find_all_matching(&self, path: &str) -> Vec<usize> {
+        let mut indices = self.glob_set.matches(path);
+        indices.sort_unstable();
+        indices
+    }
+
+    /// Find the owners of a given file path using last-match-wins semantics.
+    pub fn find_owners(&self, path: &str) -> &[String] {
+        let indices = self.glob_set.matches(path);
+        indices.iter().max().map_or(&[], |&i| &self.rules[i].owners)
+    }
 }
 
 #[cfg(test)]
@@ -163,12 +182,12 @@ mod tests {
     fn test_last_match_wins() {
         let input = "* @default\n*.js @js-team\n/src/special.js @special\n";
         let file = crate::ast::parse(input);
-        let rules = compile_rules(&file);
+        let rs = RuleSet::new(&file);
 
-        assert_eq!(find_owners("README.md", &rules), &["@default"]);
-        assert_eq!(find_owners("app.js", &rules), &["@js-team"]);
-        assert_eq!(find_owners("src/app.js", &rules), &["@js-team"]);
-        assert_eq!(find_owners("src/special.js", &rules), &["@special"]);
+        assert_eq!(rs.find_owners("README.md"), &["@default"]);
+        assert_eq!(rs.find_owners("app.js"), &["@js-team"]);
+        assert_eq!(rs.find_owners("src/app.js"), &["@js-team"]);
+        assert_eq!(rs.find_owners("src/special.js"), &["@special"]);
     }
 
     #[test]
@@ -176,11 +195,11 @@ mod tests {
         let input =
             "/src/sentry/snuba/ @snuba\n/src/sentry/snuba/metrics/query.py @snuba @telemetry\n";
         let file = crate::ast::parse(input);
-        let rules = compile_rules(&file);
+        let rs = RuleSet::new(&file);
 
-        assert_eq!(find_owners("src/sentry/snuba/foo.py", &rules), &["@snuba"]);
+        assert_eq!(rs.find_owners("src/sentry/snuba/foo.py"), &["@snuba"]);
         assert_eq!(
-            find_owners("src/sentry/snuba/metrics/query.py", &rules),
+            rs.find_owners("src/sentry/snuba/metrics/query.py"),
             &["@snuba", "@telemetry"]
         );
     }
@@ -195,7 +214,8 @@ mod tests {
 
     #[test]
     fn test_no_rules_means_unowned() {
-        let rules: Vec<CompiledRule> = vec![];
-        assert!(find_owners("any/file.py", &rules).is_empty());
+        let file = crate::ast::parse("");
+        let rs = RuleSet::new(&file);
+        assert!(rs.find_owners("any/file.py").is_empty());
     }
 }
