@@ -1,0 +1,7 @@
+- id: turf-format
+  name: turf format
+  description: Format and sort CODEOWNERS files
+  entry: turf format --check
+  language: rust
+  files: CODEOWNERS$
+  pass_filenames: true
