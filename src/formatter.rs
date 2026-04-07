@@ -1,22 +1,40 @@
 use crate::ast::{File, Group, Line};
 
+/// Maximum global alignment column. The global column is the largest natural
+/// column across all groups, but capped at this value. Groups that exceed it
+/// fall back to their own natural alignment.
+const MAX_OWNER_COLUMN: usize = 90;
+
 /// Format a CODEOWNERS AST back into a string.
 ///
 /// Formatting rules:
-/// - Within each group, rule lines are column-aligned: the owner column starts
-///   at the same position (1 space after the longest pattern in the group).
+/// - A global alignment column is computed as the largest natural column across
+///   all groups, capped at 90. Groups that fit within this use the global column.
+/// - Groups whose longest pattern exceeds the global column align to their own
+///   natural column (longest pattern + 1 space) instead.
 /// - Groups are separated by exactly one blank line.
 /// - Comments are preserved as-is.
 /// - Inline comments are separated from the last owner by one space.
 /// - Multiple consecutive blank lines in the source are collapsed to one.
 pub fn format(file: &File) -> String {
+    // Find the global column: max natural column across all groups, capped.
+    let global_column = file
+        .groups
+        .iter()
+        .filter_map(|g| natural_owner_column(g))
+        .filter(|&col| col <= MAX_OWNER_COLUMN)
+        .max()
+        // When no group fits under the cap (all oversized, or no owned rules),
+        // each group will fall back to its own natural column in format_group.
+        .unwrap_or(0);
+
     let mut output = String::new();
 
     for (i, group) in file.groups.iter().enumerate() {
         if i > 0 {
             output.push('\n');
         }
-        format_group(group, &mut output);
+        format_group(group, global_column, &mut output);
     }
 
     // Ensure file ends with a newline.
@@ -27,9 +45,10 @@ pub fn format(file: &File) -> String {
     output
 }
 
-fn format_group(group: &Group, output: &mut String) {
-    // First pass: find the longest pattern in this group's rules.
-    let max_pattern_len = group
+/// Compute the natural owner column for a group (longest pattern + 1 space).
+/// Returns `None` if the group has no rules with owners.
+fn natural_owner_column(group: &Group) -> Option<usize> {
+    group
         .lines
         .iter()
         .filter_map(|line| match line {
@@ -37,11 +56,14 @@ fn format_group(group: &Group, output: &mut String) {
             _ => None,
         })
         .max()
-        .unwrap_or(0);
+        .map(|len| len + 1)
+}
 
-    // The owner column starts at max_pattern_len + padding.
-    // Use at least 1 space of padding, but pad to a consistent column.
-    let owner_column = max_pattern_len + 1;
+fn format_group(group: &Group, global_column: usize, output: &mut String) {
+    // Use the global column, unless this group's longest pattern exceeds it.
+    let owner_column = natural_owner_column(group)
+        .filter(|&col| col > global_column)
+        .unwrap_or(global_column);
 
     for line in &group.lines {
         match line {
@@ -77,10 +99,10 @@ mod tests {
 
     #[test]
     fn test_format_alignment() {
+        // Global column = max natural column = 21 (from /src/very/long/path/ + 1).
         let input = "/src/ @team1\n/src/very/long/path/ @team2\n/x/ @team3\n";
         let file = parse(input);
         let output = format(&file);
-        // All owner columns should align.
         let lines: Vec<&str> = output.lines().collect();
         assert_eq!(lines[0], "/src/                @team1");
         assert_eq!(lines[1], "/src/very/long/path/ @team2");
@@ -100,7 +122,10 @@ mod tests {
         let input = "/src/ @team1\n\n\n\n/lib/ @team2\n";
         let file = parse(input);
         let output = format(&file);
-        assert_eq!(output, "/src/ @team1\n\n/lib/ @team2\n");
+        let lines: Vec<&str> = output.lines().collect();
+        // Both groups share the same global column, separated by one blank line.
+        assert_eq!(lines[0].find('@'), lines[2].find('@'));
+        assert_eq!(lines[1], "");
     }
 
     #[test]
@@ -131,13 +156,16 @@ mod tests {
 
     #[test]
     fn test_format_separate_groups() {
+        // Two groups with short patterns share the same global column.
         let input = "# Group 1\n/src/ @team1\n\n# Group 2\n/lib/ @team2\n";
         let file = parse(input);
         let output = format(&file);
-        assert_eq!(
-            output,
-            "# Group 1\n/src/ @team1\n\n# Group 2\n/lib/ @team2\n"
-        );
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines[0], "# Group 1");
+        assert_eq!(lines[2], "");
+        assert_eq!(lines[3], "# Group 2");
+        // Both rules align at the same column.
+        assert_eq!(lines[1].find('@'), lines[4].find('@'));
     }
 
     #[test]
@@ -152,7 +180,6 @@ mod tests {
 
     #[test]
     fn test_format_alignment_with_ownerless_rule_in_group() {
-        // A rule with no owners should NOT affect the alignment column for other rules.
         let input = "/apps/github\n/src/very/long/path/ @team1\n/x/ @team2\n";
         let file = parse(input);
         let output = format(&file);
@@ -160,6 +187,72 @@ mod tests {
         assert_eq!(lines[0], "/apps/github");
         assert_eq!(lines[1], "/src/very/long/path/ @team1");
         assert_eq!(lines[2], "/x/                  @team2");
+    }
+
+    #[test]
+    fn test_format_global_column_capped_at_max() {
+        // With a large file the global column should cap at MAX_OWNER_COLUMN.
+        // Group 1 has a long (but under 90) pattern, group 2 has short patterns.
+        let pat = "/".to_string() + &"a".repeat(85) + "/";
+        let input = format!("{} @team1\n\n/short/ @team2\n", pat);
+        let file = parse(&input);
+        let output = format(&file);
+        let lines: Vec<&str> = output.lines().collect();
+        // Global column = 88 (87-char pattern + 1), both groups use it.
+        let col = lines[0].find('@').unwrap();
+        assert_eq!(col, 88);
+        assert_eq!(lines[2].find('@').unwrap(), 88);
+    }
+
+    #[test]
+    fn test_format_oversized_group_aligns_naturally() {
+        // When a group's longest pattern exceeds MAX_OWNER_COLUMN, that group
+        // falls back to natural alignment while others use the global column.
+        let long_pattern = "/".to_string() + &"a".repeat(95);
+        let input = format!("{} @team1\n\n/short/ @team2\n", long_pattern);
+        let file = parse(&input);
+        let output = format(&file);
+        let lines: Vec<&str> = output.lines().collect();
+        // Oversized group aligns naturally.
+        let col = lines[0].find('@').unwrap();
+        assert_eq!(col, 97); // 96-char pattern + 1 space
+        // Short group uses the global column (just /short/ = 8).
+        let short_col = lines[2].find('@').unwrap();
+        assert_eq!(short_col, 8);
+    }
+
+    #[test]
+    fn test_format_all_groups_oversized() {
+        // When every group exceeds MAX_OWNER_COLUMN, each aligns naturally.
+        let pat1 = "/".to_string() + &"a".repeat(95);
+        let pat2 = "/".to_string() + &"b".repeat(100);
+        let input = format!("{} @team1\n\n{} @team2\n/short/ @team3\n", pat1, pat2);
+        let file = parse(&input);
+        let output = format(&file);
+        let lines: Vec<&str> = output.lines().collect();
+        // Group 1 aligns at 97.
+        assert_eq!(lines[0].find('@').unwrap(), 97);
+        // Group 2's longest is pat2 (102 chars), so aligns at 102.
+        assert_eq!(lines[2].find('@').unwrap(), 102);
+        assert_eq!(lines[3].find('@').unwrap(), 102);
+    }
+
+    #[test]
+    fn test_format_comment_only_group() {
+        let input = "# Just a comment\n\n/src/ @team1\n";
+        let file = parse(input);
+        let output = format(&file);
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines[0], "# Just a comment");
+        assert!(lines[2].contains("@team1"));
+    }
+
+    #[test]
+    fn test_format_empty_file() {
+        let input = "";
+        let file = parse(input);
+        let output = format(&file);
+        assert_eq!(output, "\n");
     }
 
     #[test]
