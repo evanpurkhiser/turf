@@ -21,7 +21,7 @@ pub fn format(file: &File) -> String {
     let global_column = file
         .groups
         .iter()
-        .filter_map(|g| natural_owner_column(g))
+        .filter_map(natural_owner_column)
         .filter(|&col| col <= MAX_OWNER_COLUMN)
         .max()
         // When no group fits under the cap (all oversized, or no owned rules),
